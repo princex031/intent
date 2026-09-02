@@ -2,23 +2,28 @@
 
 import { useEffect, useState } from "react";
 import {
-  intentState,
   addIntentNode,
-  focusAttention,
-  surfaceContradiction,
   evolveIntent,
   forkIntent,
+  focusAttention,
+  intentState,
   registerIntentTools,
+  resetIntentNodes,
+  setIntent,
+  subscribeIntent,
+  surfaceContradiction,
   unregisterIntentTools,
   type IntentNode,
   type IntentNodeType,
 } from "./webmcp";
 
 export default function Home() {
-  const [intent, setIntent] = useState("");
+  const [intent, setIntentInput] = useState("");
   const [submittedIntent, setSubmittedIntent] = useState("");
-  const [activeNode, setActiveNode] = useState<IntentNodeType>("goal");
   const [nodes, setNodes] = useState<IntentNode[]>([]);
+  const [activeNode, setActiveNode] =
+    useState<IntentNodeType>("goal");
+
   const [contradiction, setContradiction] = useState("");
   const [evolution, setEvolution] = useState("");
   const [forked, setForked] = useState(false);
@@ -27,7 +32,20 @@ export default function Home() {
   useEffect(() => {
     registerIntentTools();
 
+    const unsubscribe = subscribeIntent(() => {
+      setNodes([...intentState.nodes]);
+
+      const active = intentState.nodes.find(
+        (node) => node.id === intentState.activeNode
+      );
+
+      if (active) {
+        setActiveNode(active.type);
+      }
+    });
+
     return () => {
+      unsubscribe();
       unregisterIntentTools();
     };
   }, []);
@@ -35,58 +53,44 @@ export default function Home() {
   function enterIntent() {
     if (!intent.trim()) return;
 
-    intentState.text = intent;
-    intentState.nodes = [];
-    intentState.version = 1;
+    setIntent(intent.trim());
+    resetIntentNodes();
 
-    const initialNodes: IntentNode[] = [
-      {
-        ...addIntentNode("goal", intent),
-        relevance: 1,
-      },
-      {
-        ...addIntentNode(
-          "constraint",
-          "Must feel genuinely original"
-        ),
-        relevance: 0.8,
-      },
-      {
-        ...addIntentNode(
-          "value",
-          "Meaningful real-world impact"
-        ),
-        relevance: 0.9,
-      },
-      {
-        ...addIntentNode(
-          "unknown",
-          "What becomes possible when humans and agents share intent?"
-        ),
-        relevance: 0.6,
-      },
-    ];
-
-    initialNodes.sort(
-      (a, b) => (b.relevance ?? 0) - (a.relevance ?? 0)
+    const goal = addIntentNode(
+      "goal",
+      intent.trim(),
+      1
     );
 
-    setNodes(initialNodes);
-    setSubmittedIntent(intent);
+    addIntentNode(
+      "constraint",
+      "Must feel genuinely original",
+      0.8
+    );
+
+    addIntentNode(
+      "value",
+      "Meaningful real-world impact",
+      0.9
+    );
+
+    addIntentNode(
+      "unknown",
+      "What becomes possible when humans and agents share intent?",
+      0.6
+    );
+
+    focusAttention(goal.id);
+
+    setSubmittedIntent(intent.trim());
     setContradiction("");
     setEvolution("");
     setForked(false);
-    setHistory([intent]);
+    setHistory([intent.trim()]);
   }
 
-  function selectNode(type: IntentNodeType) {
-    setActiveNode(type);
-
-    const node = nodes.find((n) => n.type === type);
-
-    if (node) {
-      focusAttention(node.id);
-    }
+  function selectNode(node: IntentNode) {
+    focusAttention(node.id);
   }
 
   function revealContradiction() {
@@ -95,7 +99,9 @@ export default function Home() {
       "Fast execution"
     );
 
-    setContradiction(`${result.first} ↔ ${result.second}`);
+    setContradiction(
+      `${result.first} ↔ ${result.second}`
+    );
   }
 
   function proposeEvolution() {
@@ -111,11 +117,11 @@ export default function Home() {
   function acceptEvolution() {
     if (!evolution) return;
 
-    setHistory((previous) => [...previous, evolution]);
-    setEvolution("");
-  }
+    setHistory((previous) => [
+      ...previous,
+      evolution,
+    ]);
 
-  function rejectEvolution() {
     setEvolution("");
   }
 
@@ -136,14 +142,16 @@ export default function Home() {
         </h1>
 
         <p className="mt-6 max-w-2xl text-lg text-gray-400">
-          Don&apos;t describe the task. Describe the change you want
-          in the world.
+          Don&apos;t describe the task. Describe the change
+          you want in the world.
         </p>
 
         <section className="mt-12 rounded-3xl border border-white/10 bg-white/[0.03] p-6 md:p-10">
           <textarea
             value={intent}
-            onChange={(e) => setIntent(e.target.value)}
+            onChange={(event) =>
+              setIntentInput(event.target.value)
+            }
             placeholder="I want to..."
             className="min-h-40 w-full resize-none bg-transparent text-2xl outline-none placeholder:text-gray-700 md:text-4xl"
           />
@@ -164,8 +172,8 @@ export default function Home() {
               </p>
 
               <p className="mt-2 text-sm text-gray-600">
-                A shared space where human intention and agent
-                reasoning meet.
+                A shared space where human intention and
+                agent reasoning meet.
               </p>
 
               <h2 className="mt-5 text-2xl md:text-3xl">
@@ -176,9 +184,9 @@ export default function Home() {
                 {nodes.map((node) => (
                   <button
                     key={node.id}
-                    onClick={() => selectNode(node.type)}
+                    onClick={() => selectNode(node)}
                     className={`rounded-2xl border p-6 text-left transition-all duration-700 active:scale-95 ${
-                      activeNode === node.type
+                      node.id === intentState.activeNode
                         ? "scale-[1.03] border-white/50 bg-white/10"
                         : "border-white/10 bg-white/[0.02] hover:bg-white/[0.05]"
                     }`}
@@ -189,7 +197,10 @@ export default function Home() {
                       </p>
 
                       <span className="text-xs text-gray-700">
-                        {Math.round((node.relevance ?? 0) * 100)}%
+                        {Math.round(
+                          (node.relevance ?? 0) * 100
+                        )}
+                        %
                       </span>
                     </div>
 
@@ -253,7 +264,7 @@ export default function Home() {
                     </button>
 
                     <button
-                      onClick={rejectEvolution}
+                      onClick={() => setEvolution("")}
                       className="rounded-full border border-white/20 px-5 py-2 text-sm transition hover:bg-white/10 active:scale-95"
                     >
                       Reject
