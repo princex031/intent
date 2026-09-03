@@ -1464,18 +1464,43 @@ export default function Page() {
     setDetailOpen(true);
   }, []);
 
+  const webMCPRuntimeRef = useRef({
+    addActivity,
+    files,
+    intent,
+    nodes,
+    decisions,
+    actions,
+    openCount,
+    openView,
+    pushToast,
+  });
+
+  webMCPRuntimeRef.current = {
+    addActivity,
+    files,
+    intent,
+    nodes,
+    decisions,
+    actions,
+    openCount,
+    openView,
+    pushToast,
+  };
+
   useEffect(() => {
     const modelContext = (
       document as Document & {
         modelContext?: {
           registerTool: (
-            name: string,
-            config: {
+            tool: {
+              name: string;
               description: string;
               inputSchema?: Record<string, unknown>;
               execute: (args: Record<string, unknown>) => Promise<unknown>;
             },
-          ) => void | (() => void);
+            options?: { signal?: AbortSignal },
+          ) => Promise<void>;
         };
       }
     ).modelContext;
@@ -1485,286 +1510,307 @@ export default function Page() {
       return;
     }
 
-    const registrations: Array<void | (() => void)> = [];
+    const controller = new AbortController();
+    let cancelled = false;
 
-    registrations.push(
-      modelContext.registerTool("inspect_intent", {
-        description:
-          "Inspect the current INTENT state, including goals, constraints, values, unknowns, context, decisions, actions and unresolved tensions.",
-        inputSchema: {
-          type: "object",
-          properties: {},
-        },
-        execute: async () => ({
-          intent,
-          nodes,
-          files: files.map(({ id, name, type, tags }) => ({
-            id,
-            name,
-            type,
-            tags,
-          })),
-          decisions,
-          actions,
-          openUnknowns: openCount,
-        }),
-      }),
-    );
-
-    registrations.push(
-      modelContext.registerTool("add_intent_node", {
-        description:
-          "Add a meaningful node to the living intent space. Use goal, constraint, value, unknown, context, decision, action or output.",
-        inputSchema: {
-          type: "object",
-          properties: {
-            kind: {
-              type: "string",
-              enum: [
-                "goal",
-                "constraint",
-                "value",
-                "unknown",
-                "context",
-                "decision",
-                "action",
-                "output",
-              ],
+    const registerTools = async () => {
+      try {
+        await Promise.all([
+          modelContext.registerTool(
+            {
+              name: "inspect_intent",
+              description:
+                "Inspect the current INTENT state, including goals, constraints, values, unknowns, context, decisions, actions and unresolved tensions.",
+              inputSchema: {
+                type: "object",
+                properties: {},
+              },
+              execute: async () => ({
+                intent: webMCPRuntimeRef.current.intent,
+                nodes: webMCPRuntimeRef.current.nodes,
+                files: webMCPRuntimeRef.current.files.map(({ id, name, type, tags }) => ({
+                  id,
+                  name,
+                  type,
+                  tags,
+                })),
+                decisions: webMCPRuntimeRef.current.decisions,
+                actions: webMCPRuntimeRef.current.actions,
+                openUnknowns: webMCPRuntimeRef.current.openCount,
+              }),
             },
-            title: { type: "string" },
-            detail: { type: "string" },
-          },
-          required: ["kind", "title", "detail"],
-        },
-        execute: async (args) => {
-          const kind = String(args.kind) as NodeKind;
-          const title = String(args.title);
-          const detail = String(args.detail);
+            { signal: controller.signal },
+          ),
 
-          const created: IntentNode = {
-            id: uid(kind),
-            kind,
-            title,
-            detail,
-            status: kind === "unknown" ? "open" : "active",
-            confidence: 0.82,
-            createdAt: Date.now(),
-            source: "WebMCP agent",
-          };
+          modelContext.registerTool(
+            {
+              name: "add_intent_node",
+              description:
+                "Add a meaningful node to the living intent space. Use goal, constraint, value, unknown, context, decision, action or output.",
+              inputSchema: {
+                type: "object",
+                properties: {
+                  kind: {
+                    type: "string",
+                    enum: [
+                      "goal",
+                      "constraint",
+                      "value",
+                      "unknown",
+                      "context",
+                      "decision",
+                      "action",
+                      "output",
+                    ],
+                  },
+                  title: { type: "string" },
+                  detail: { type: "string" },
+                },
+                required: ["kind", "title", "detail"],
+              },
+              execute: async (args) => {
+                const kind = String(args.kind) as NodeKind;
+                const title = String(args.title);
+                const detail = String(args.detail);
 
-          setNodes((current) => [created, ...current]);
-          setActiveNodeId(created.id);
+                const created: IntentNode = {
+                  id: uid(kind),
+                  kind,
+                  title,
+                  detail,
+                  status: kind === "unknown" ? "open" : "active",
+                  confidence: 0.82,
+                  createdAt: Date.now(),
+                  source: "WebMCP agent",
+                };
 
-          addActivity({
-            actor: "agent",
-            title: `${KIND_LABEL[kind]} added via WebMCP`,
-            detail: title,
-            type: "changed",
-          });
+                setNodes((current) => [created, ...current]);
+                setActiveNodeId(created.id);
 
-          return {
-            ok: true,
-            node: created,
-            requiresHumanDecision:
-              kind === "decision" || kind === "constraint",
-          };
-        },
-      }),
-    );
+                webMCPRuntimeRef.current.addActivity({
+                  actor: "agent",
+                  title: `${KIND_LABEL[kind]} added via WebMCP`,
+                  detail: title,
+                  type: "changed",
+                });
 
-    registrations.push(
-      modelContext.registerTool("focus_attention", {
-        description:
-          "Focus the human attention on a specific node or unresolved point without changing the underlying intent.",
-        inputSchema: {
-          type: "object",
-          properties: {
-            nodeId: { type: "string" },
-          },
-          required: ["nodeId"],
-        },
-        execute: async (args) => {
-          const nodeId = String(args.nodeId);
-          const node = nodes.find((item) => item.id === nodeId);
+                return {
+                  ok: true,
+                  node: created,
+                  requiresHumanDecision:
+                    kind === "decision" || kind === "constraint",
+                };
+              },
+            },
+            { signal: controller.signal },
+          ),
 
-          if (!node) {
-            return {
-              ok: false,
-              reason: "Node not found",
-            };
-          }
+          modelContext.registerTool(
+            {
+              name: "focus_attention",
+              description:
+                "Focus the human attention on a specific node or unresolved point without changing the underlying intent.",
+              inputSchema: {
+                type: "object",
+                properties: {
+                  nodeId: { type: "string" },
+                },
+                required: ["nodeId"],
+              },
+              execute: async (args) => {
+                const nodeId = String(args.nodeId);
+                const node = webMCPRuntimeRef.current.nodes.find((item) => item.id === nodeId);
 
-          setActiveNodeId(node.id);
-          setDetailOpen(true);
-          openView("intent");
+                if (!node) {
+                  return {
+                    ok: false,
+                    reason: "Node not found",
+                  };
+                }
 
-          addActivity({
-            actor: "agent",
-            title: "Attention focused",
-            detail: node.title,
-            type: "understood",
-          });
+                setActiveNodeId(node.id);
+                setDetailOpen(true);
+                webMCPRuntimeRef.current.openView("intent");
 
-          return {
-            ok: true,
-            focused: node,
-          };
-        },
-      }),
-    );
+                webMCPRuntimeRef.current.addActivity({
+                  actor: "agent",
+                  title: "Attention focused",
+                  detail: node.title,
+                  type: "understood",
+                });
 
-    registrations.push(
-      modelContext.registerTool("surface_contradiction", {
-        description:
-          "Surface a possible contradiction or tradeoff without silently resolving it.",
-        inputSchema: {
-          type: "object",
-          properties: {
-            title: { type: "string" },
-            detail: { type: "string" },
-          },
-          required: ["title", "detail"],
-        },
-        execute: async (args) => {
-          const created: IntentNode = {
-            id: uid("unknown"),
-            kind: "unknown",
-            title: String(args.title),
-            detail: String(args.detail),
-            status: "open",
-            confidence: 0.74,
-            createdAt: Date.now(),
-            source: "WebMCP agent",
-          };
+                return {
+                  ok: true,
+                  focused: node,
+                };
+              },
+            },
+            { signal: controller.signal },
+          ),
 
-          setNodes((current) => [created, ...current]);
-          setActiveNodeId(created.id);
+          modelContext.registerTool(
+            {
+              name: "surface_contradiction",
+              description:
+                "Surface a possible contradiction or tradeoff without silently resolving it.",
+              inputSchema: {
+                type: "object",
+                properties: {
+                  title: { type: "string" },
+                  detail: { type: "string" },
+                },
+                required: ["title", "detail"],
+              },
+              execute: async (args) => {
+                const created: IntentNode = {
+                  id: uid("unknown"),
+                  kind: "unknown",
+                  title: String(args.title),
+                  detail: String(args.detail),
+                  status: "open",
+                  confidence: 0.74,
+                  createdAt: Date.now(),
+                  source: "WebMCP agent",
+                };
 
-          addActivity({
-            actor: "agent",
-            title: "Tension surfaced via WebMCP",
-            detail: created.title,
-            type: "proposed",
-          });
+                setNodes((current) => [created, ...current]);
+                setActiveNodeId(created.id);
 
-          return {
-            ok: true,
-            tension: created,
-            requiresHumanDecision: true,
-          };
-        },
-      }),
-    );
+                webMCPRuntimeRef.current.addActivity({
+                  actor: "agent",
+                  title: "Tension surfaced via WebMCP",
+                  detail: created.title,
+                  type: "proposed",
+                });
 
-    registrations.push(
-      modelContext.registerTool("propose_intent_evolution", {
-        description:
-          "Propose a change to the intent. The tool must not silently apply material changes; it creates a visible human-review proposal.",
-        inputSchema: {
-          type: "object",
-          properties: {
-            title: { type: "string" },
-            explanation: { type: "string" },
-            change: { type: "string" },
-          },
-          required: ["title", "explanation", "change"],
-        },
-        execute: async (args) => {
-          const proposal: AgentSuggestion = {
-            id: uid("suggestion"),
-            kind: "evolution",
-            title: String(args.title),
-            explanation: String(args.explanation),
-            change: String(args.change),
-            confidence: 0.81,
-            requiresHumanDecision: true,
-            createdAt: Date.now(),
-            status: "pending",
-          };
+                return {
+                  ok: true,
+                  tension: created,
+                  requiresHumanDecision: true,
+                };
+              },
+            },
+            { signal: controller.signal },
+          ),
 
-          setSuggestions((current) => [proposal, ...current]);
+          modelContext.registerTool(
+            {
+              name: "propose_intent_evolution",
+              description:
+                "Propose a change to the intent. The tool must not silently apply material changes; it creates a visible human-review proposal.",
+              inputSchema: {
+                type: "object",
+                properties: {
+                  title: { type: "string" },
+                  explanation: { type: "string" },
+                  change: { type: "string" },
+                },
+                required: ["title", "explanation", "change"],
+              },
+              execute: async (args) => {
+                const proposal: AgentSuggestion = {
+                  id: uid("suggestion"),
+                  kind: "evolution",
+                  title: String(args.title),
+                  explanation: String(args.explanation),
+                  change: String(args.change),
+                  confidence: 0.81,
+                  requiresHumanDecision: true,
+                  createdAt: Date.now(),
+                  status: "pending",
+                };
 
-          addActivity({
-            actor: "agent",
-            title: "Intent evolution proposed via WebMCP",
-            detail: proposal.title,
-            type: "proposed",
-          });
+                setSuggestions((current) => [proposal, ...current]);
 
-          return {
-            ok: true,
-            proposal,
-            requiresHumanDecision: true,
-          };
-        },
-      }),
-    );
+                webMCPRuntimeRef.current.addActivity({
+                  actor: "agent",
+                  title: "Intent evolution proposed via WebMCP",
+                  detail: proposal.title,
+                  type: "proposed",
+                });
 
-    registrations.push(
-      modelContext.registerTool("fork_intent", {
-        description:
-          "Create a safe branch of the current intent so another possibility can be explored without overwriting the current state.",
-        inputSchema: {
-          type: "object",
-          properties: {
-            label: { type: "string" },
-          },
-          required: ["label"],
-        },
-        execute: async (args) => {
-          const label = String(args.label);
+                return {
+                  ok: true,
+                  proposal,
+                  requiresHumanDecision: true,
+                };
+              },
+            },
+            { signal: controller.signal },
+          ),
 
-          const snapshot: Snapshot = {
-            id: uid("branch"),
-            label,
-            createdAt: Date.now(),
-            text: intent,
-            nodes: structuredClone(nodes),
-            decisions: structuredClone(decisions),
-            actions: structuredClone(actions),
-          };
+          modelContext.registerTool(
+            {
+              name: "fork_intent",
+              description:
+                "Create a safe branch of the current intent so another possibility can be explored without overwriting the current state.",
+              inputSchema: {
+                type: "object",
+                properties: {
+                  label: { type: "string" },
+                },
+                required: ["label"],
+              },
+              execute: async (args) => {
+                const label = String(args.label);
 
-          setSnapshots((current) => [snapshot, ...current].slice(0, 20));
+                const snapshot: Snapshot = {
+                  id: uid("branch"),
+                  label,
+                  createdAt: Date.now(),
+                  text: webMCPRuntimeRef.current.intent,
+                  nodes: structuredClone(webMCPRuntimeRef.current.nodes),
+                  decisions: structuredClone(webMCPRuntimeRef.current.decisions),
+                  actions: structuredClone(webMCPRuntimeRef.current.actions),
+                };
 
-          addActivity({
-            actor: "agent",
-            title: "Intent branch created",
-            detail: label,
-            type: "memory",
-          });
+                setSnapshots((current) => [snapshot, ...current].slice(0, 20));
 
-          return {
-            ok: true,
-            forkId: snapshot.id,
-            label,
-            sourceIntent: intent,
-            requiresHumanDecision: false,
-          };
-        },
-      }),
-    );
+                webMCPRuntimeRef.current.addActivity({
+                  actor: "agent",
+                  title: "Intent branch created",
+                  detail: label,
+                  type: "memory",
+                });
 
-    setWebMCPReady(true);
+                return {
+                  ok: true,
+                  forkId: snapshot.id,
+                  label,
+                  sourceIntent: webMCPRuntimeRef.current.intent,
+                  requiresHumanDecision: false,
+                };
+              },
+            },
+            { signal: controller.signal },
+          ),
+        ]);
+
+        if (!cancelled) {
+          setWebMCPReady(true);
+        }
+      } catch (error) {
+        if (cancelled || controller.signal.aborted) return;
+
+        setWebMCPReady(false);
+        console.error("WebMCP tool registration failed:", error);
+        webMCPRuntimeRef.current.pushToast({
+          title: "WebMCP unavailable",
+          detail: "The six tools could not be registered in this browser.",
+          tone: "warning",
+        });
+      }
+    };
+
+    setWebMCPReady(false);
+    void registerTools();
 
     return () => {
-      registrations.forEach((cleanup) => {
-        try {
-          if (typeof cleanup === "function") cleanup();
-        } catch {
-          // Best-effort cleanup for experimental WebMCP implementations.
-        }
-      });
+      cancelled = true;
+      controller.abort();
+      setWebMCPReady(false);
     };
-  }, [
-    addActivity,
-    files,
-    intent,
-    nodes,
-    decisions,
-    actions,
-    openCount,
-    openView,
-  ]);
+  }, []);
 
   useEffect(() => {
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
