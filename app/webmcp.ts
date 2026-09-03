@@ -8,7 +8,7 @@ export type IntentNode = {
   id: string;
   type: IntentNodeType;
   label: string;
-  relevance?: number;
+  relevance: number;
 };
 
 export type IntentState = {
@@ -102,13 +102,22 @@ export function focusAttention(nodeId: string) {
 
   intentState.activeNode = nodeId;
 
-  intentState.nodes = intentState.nodes.map((item) => ({
-    ...item,
-    relevance:
-      item.id === nodeId
-        ? 1
-        : Math.max(0.35, (item.relevance ?? 0.7) * 0.9),
-  }));
+  intentState.nodes = intentState.nodes.map((item) => {
+    if (item.id === nodeId) {
+      return {
+        ...item,
+        relevance: 1,
+      };
+    }
+
+    return {
+      ...item,
+      relevance: Math.max(
+        0.25,
+        (item.relevance ?? 0.7) * 0.82
+      ),
+    };
+  });
 
   notify();
 
@@ -123,42 +132,30 @@ export function surfaceContradiction(
   first: string,
   second: string
 ) {
-  const result = {
+  return {
     type: "contradiction",
     first,
     second,
     requiresHumanDecision: true,
   };
-
-  notify();
-
-  return result;
 }
 
 export function evolveIntent(reason: string) {
   intentState.version += 1;
 
-  const result = {
+  return {
     version: intentState.version,
     reason,
     humanApprovalRequired: true,
   };
-
-  notify();
-
-  return result;
 }
 
 export function forkIntent(label: string) {
-  const result = {
+  return {
     forkId: crypto.randomUUID(),
     label,
     sourceVersion: intentState.version,
   };
-
-  notify();
-
-  return result;
 }
 
 type WebMCPContext = {
@@ -252,7 +249,12 @@ export async function registerIntentTools() {
           type: IntentNodeType;
           label: string;
           relevance?: number;
-        }) => addIntentNode(type, label, relevance),
+        }) =>
+          addIntentNode(
+            type,
+            label,
+            relevance
+          ),
       },
       { signal: controller.signal }
     );
@@ -272,8 +274,11 @@ export async function registerIntentTools() {
           },
           required: ["nodeId"],
         },
-        execute: async ({ nodeId }: { nodeId: string }) =>
-          focusAttention(nodeId),
+        execute: async ({
+          nodeId,
+        }: {
+          nodeId: string;
+        }) => focusAttention(nodeId),
       },
       { signal: controller.signal }
     );
@@ -283,7 +288,7 @@ export async function registerIntentTools() {
         name: "surface_contradiction",
         title: "Surface Contradiction",
         description:
-          "Surface a tension between two competing parts of an intent and require human resolution.",
+          "Surface a tension between two competing parts of an intent.",
         inputSchema: {
           type: "object",
           properties: {
@@ -302,7 +307,11 @@ export async function registerIntentTools() {
         }: {
           first: string;
           second: string;
-        }) => surfaceContradiction(first, second),
+        }) =>
+          surfaceContradiction(
+            first,
+            second
+          ),
       },
       { signal: controller.signal }
     );
@@ -322,8 +331,11 @@ export async function registerIntentTools() {
           },
           required: ["reason"],
         },
-        execute: async ({ reason }: { reason: string }) =>
-          evolveIntent(reason),
+        execute: async ({
+          reason,
+        }: {
+          reason: string;
+        }) => evolveIntent(reason),
       },
       { signal: controller.signal }
     );
@@ -343,13 +355,18 @@ export async function registerIntentTools() {
           },
           required: ["label"],
         },
-        execute: async ({ label }: { label: string }) =>
-          forkIntent(label),
+        execute: async ({
+          label,
+        }: {
+          label: string;
+        }) => forkIntent(label),
       },
       { signal: controller.signal }
     );
 
-    console.log("INTENT WebMCP tools registered.");
+    console.log(
+      "INTENT WebMCP tools registered."
+    );
   } catch (error) {
     if (!controller.signal.aborted) {
       console.error(
